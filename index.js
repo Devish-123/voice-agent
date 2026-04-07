@@ -4,16 +4,23 @@ const OpenAI = require("openai");
 
 const app = express();
 
-// ✅ Middleware (VERY IMPORTANT)
+// ✅ Middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// ✅ OpenAI setup
+// 🔥 Debug middleware (KEEP THIS)
+app.use((req, res, next) => {
+  console.log("👉 HEADERS:", req.headers);
+  console.log("👉 RAW BODY:", req.body);
+  next();
+});
+
+// ✅ OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// ✅ Base URL fallback (IMPORTANT FIX)
+// ✅ BASE URL (fallback safe)
 const BASE_URL =
   process.env.BASE_URL || "https://voice-agent-nux8.onrender.com";
 
@@ -43,16 +50,23 @@ app.post("/process", async (req, res) => {
   try {
     console.log("🔥 BODY RECEIVED:", req.body);
 
-    // ✅ Robust speech extraction
+    // ✅ FIX: Normalize keys (remove spaces)
+    const cleanedBody = {};
+    for (let key in req.body) {
+      cleanedBody[key.trim()] = req.body[key];
+    }
+
+    // ✅ Extract speech safely
     const userSpeech =
-      req.body.SpeechResult ||
-      req.body.speech ||
-      req.body.text ||
+      cleanedBody.SpeechResult ||
+      cleanedBody.speech ||
+      cleanedBody.text ||
+      Object.values(cleanedBody)[0] ||
       "";
 
     console.log("🗣 User said:", userSpeech);
 
-    // ❌ If empty input
+    // ❌ If empty
     if (!userSpeech || userSpeech.trim() === "") {
       return res.send(`
 <Response>
@@ -62,7 +76,7 @@ app.post("/process", async (req, res) => {
       `);
     }
 
-    // 🔥 INTENT DETECTION (LLM)
+    // 🔥 INTENT DETECTION
     const intentRes = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
