@@ -4,61 +4,72 @@ const OpenAI = require("openai");
 
 const app = express();
 
-// ✅ Middleware (IMPORTANT for Exotel)
-app.use(express.urlencoded({ extended: false }));
+// ✅ Middleware (VERY IMPORTANT)
+app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 // ✅ OpenAI setup
 const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-// ✅ Root route (for testing)
+// ✅ Base URL fallback (IMPORTANT FIX)
+const BASE_URL =
+  process.env.BASE_URL || "https://voice-agent-nux8.onrender.com";
+
+// ✅ Root route
 app.get("/", (req, res) => {
-    res.send("Voice AI Agent Running 🚀");
+  res.send("Voice AI Agent Running 🚀");
 });
 
-// 🔥 STEP 1: Incoming Call (Exotel hits this)
+// 🔥 STEP 1: Incoming Call
 app.post("/voice", (req, res) => {
-    res.set("Content-Type", "text/xml");
+  res.set("Content-Type", "text/xml");
 
-    // ✅ IMPORTANT: Use full URL in production
-    const baseUrl = process.env.BASE_URL;
-
-    res.send(`
+  res.send(`
 <Response>
+  <Say>Please wait while I connect you.</Say>
+  <Pause length="2"/>
   <Say>Welcome to our hotel. How can I help you today?</Say>
-  <GetInput action="${baseUrl}/process" method="POST" input="speech"></GetInput>
+  <GetInput action="${BASE_URL}/process" method="POST" input="speech"></GetInput>
 </Response>
   `);
 });
 
-// 🔥 STEP 2: Process User Speech
+// 🔥 STEP 2: Process Speech
 app.post("/process", async (req, res) => {
-    res.set("Content-Type", "text/xml");
+  res.set("Content-Type", "text/xml");
 
-    try {
-        const userSpeech = req.body.SpeechResult || "";
+  try {
+    console.log("🔥 BODY RECEIVED:", req.body);
 
-        console.log("🗣 User said:", userSpeech);
+    // ✅ Robust speech extraction
+    const userSpeech =
+      req.body.SpeechResult ||
+      req.body.speech ||
+      req.body.text ||
+      "";
 
-        if (!userSpeech) {
-            return res.send(`
+    console.log("🗣 User said:", userSpeech);
+
+    // ❌ If empty input
+    if (!userSpeech || userSpeech.trim() === "") {
+      return res.send(`
 <Response>
   <Say>I didn't catch that. Could you please repeat?</Say>
-  <GetInput action="${process.env.BASE_URL}/process" method="POST" input="speech"></GetInput>
+  <GetInput action="${BASE_URL}/process" method="POST" input="speech"></GetInput>
 </Response>
       `);
-        }
+    }
 
-        // 🔥 INTENT DETECTION (LLM-based)
-        const intentRes = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [
-                {
-                    role: "system",
-                    content: `
-Classify the intent of the user.
+    // 🔥 INTENT DETECTION (LLM)
+    const intentRes = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `
+Classify the user intent.
 
 Return ONLY one word:
 FAQ
@@ -66,38 +77,37 @@ BOOKING
 DISCOUNT
 OTHER
           `,
-                },
-                {
-                    role: "user",
-                    content: userSpeech,
-                },
-            ],
-        });
+        },
+        {
+          role: "user",
+          content: userSpeech,
+        },
+      ],
+    });
 
-        const intent = intentRes.choices[0].message.content.trim();
+    const intent = intentRes.choices[0].message.content.trim();
+    console.log("🎯 Intent:", intent);
 
-        console.log("🎯 Detected intent:", intent);
-
-        // 🔴 ESCALATION LOGIC
-        if (intent === "BOOKING" || intent === "DISCOUNT") {
-            return res.send(`
+    // 🔴 ESCALATION
+    if (intent === "BOOKING" || intent === "DISCOUNT") {
+      return res.send(`
 <Response>
   <Say>Please wait while I connect you to our staff.</Say>
   <Dial>+919966647375</Dial>
 </Response>
       `);
-        }
+    }
 
-        // 🤖 AI RESPONSE
-        let reply = "Sorry, I couldn't process that.";
+    // 🤖 AI RESPONSE
+    let reply = "Sorry, something went wrong.";
 
-        try {
-            const aiResponse = await openai.chat.completions.create({
-                model: "gpt-4o-mini",
-                messages: [
-                    {
-                        role: "system",
-                        content: `
+    try {
+      const aiRes = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `
 You are a polite hotel receptionist.
 
 Answer briefly and clearly.
@@ -108,43 +118,43 @@ Hotel details:
 - Check-in: 12 PM
 - Check-out: 11 AM
             `,
-                    },
-                    {
-                        role: "user",
-                        content: userSpeech,
-                    },
-                ],
-            });
+          },
+          {
+            role: "user",
+            content: userSpeech,
+          },
+        ],
+      });
 
-            reply = aiResponse.choices[0].message.content;
-        } catch (err) {
-            console.error("❌ OpenAI error:", err);
-            reply = "Sorry, let me connect you to our staff.";
-        }
+      reply = aiRes.choices[0].message.content;
+    } catch (err) {
+      console.error("❌ OpenAI error:", err);
+      reply = "Let me connect you to our staff.";
+    }
 
-        // 🔁 CONTINUE CONVERSATION
-        res.send(`
+    // 🔁 Continue conversation
+    res.send(`
 <Response>
   <Say>${reply}</Say>
-  <GetInput action="${process.env.BASE_URL}/process" method="POST" input="speech"></GetInput>
+  <GetInput action="${BASE_URL}/process" method="POST" input="speech"></GetInput>
 </Response>
     `);
 
-    } catch (err) {
-        console.error("❌ Server error:", err);
+  } catch (err) {
+    console.error("❌ Server error:", err);
 
-        res.send(`
+    res.send(`
 <Response>
-  <Say>Something went wrong. Please hold while we connect you.</Say>
+  <Say>Something went wrong. Connecting you to staff.</Say>
   <Dial>+919966647375</Dial>
 </Response>
     `);
-    }
+  }
 });
 
-// ✅ Start server (Railway compatible)
+// ✅ Start server
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
